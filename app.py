@@ -66,7 +66,7 @@ def transcribe():
     try:
         response = client.speech_to_text.transcribe(
             file=(audio_file.filename, audio_file.stream, audio_file.content_type),
-            model="saaras:v2",
+            model="saaras:v4",
             language_code="en-IN",
         )
         transcript = response.transcript if hasattr(response, "transcript") else str(response)
