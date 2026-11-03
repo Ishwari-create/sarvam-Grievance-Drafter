@@ -26,6 +26,24 @@ client = SarvamAI(api_subscription_key=api_key)
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 25 * 1024 * 1024  # 25 MB
 
+STT_MODEL = "saaras:v2"
+
+
+def _normalise_upload(audio_file):
+    """Standardise file metadata for Sarvam STT, which expects a WAV-compatible file."""
+    filename = (audio_file.filename or "voice.wav").strip() or "voice.wav"
+    content_type = (audio_file.content_type or audio_file.mimetype or "audio/wav").lower()
+
+    if "webm" in filename.lower() or "webm" in content_type:
+        content_type = "audio/wav"
+
+    if not filename.lower().endswith((".wav", ".mp3", ".m4a", ".ogg")):
+        name, ext = os.path.splitext(filename)
+        filename = f"{name or 'voice'}.wav"
+
+    return filename, content_type
+
+
 # ── CPGRAMS system prompt ──────────────────────────────────────────────────
 SYSTEM_PROMPT = """You are an expert administrative assistant that converts raw citizen complaints into structured CPGRAMS (Centralised Public Grievance Redress and Monitoring System) grievances.
 
@@ -64,9 +82,11 @@ def transcribe():
         return jsonify({"error": "Empty filename"}), 400
 
     try:
+        audio_file.stream.seek(0)
+        filename, content_type = _normalise_upload(audio_file)
         response = client.speech_to_text.transcribe(
-            file=(audio_file.filename, audio_file.stream, audio_file.content_type),
-            model="saaras:v4",
+            file=(filename, audio_file.stream, content_type),
+            model=STT_MODEL,
             language_code="en-IN",
         )
         transcript = response.transcript if hasattr(response, "transcript") else str(response)

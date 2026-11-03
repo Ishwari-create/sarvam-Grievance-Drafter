@@ -80,3 +80,4 @@ Open [http://localhost:5000](http://localhost:5000) in your browser.
 ## Getting a Sarvam API key
 
 Sign up at [sarvam.ai](https://sarvam.ai) → Dashboard → API Keys.
+

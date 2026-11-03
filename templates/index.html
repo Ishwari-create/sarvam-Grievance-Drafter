@@ -125,17 +125,84 @@ function setLoading(btn, loading, label) {
     : btn.dataset.originalLabel;
 }
 
+function audioBufferToWav(buffer) {
+  const numChannels = buffer.numberOfChannels;
+  const sampleRate = buffer.sampleRate;
+  const format = 1;
+  const bitDepth = 16;
+  const bytesPerSample = bitDepth / 8;
+  const blockAlign = numChannels * bytesPerSample;
+  const dataLength = buffer.length * blockAlign;
+  const arrayBuffer = new ArrayBuffer(44 + dataLength);
+  const view = new DataView(arrayBuffer);
+
+  function writeString(offset, string) {
+    for (let i = 0; i < string.length; i++) {
+      view.setUint8(offset + i, string.charCodeAt(i));
+    }
+  }
+
+  writeString(0, 'RIFF');
+  view.setUint32(4, 36 + dataLength, true);
+  writeString(8, 'WAVE');
+  writeString(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, format, true);
+  view.setUint16(22, numChannels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * blockAlign, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, bitDepth, true);
+  writeString(36, 'data');
+  view.setUint32(40, dataLength, true);
+
+  let offset = 44;
+  const channels = [];
+  for (let i = 0; i < numChannels; i++) {
+    channels.push(buffer.getChannelData(i));
+  }
+
+  for (let i = 0; i < buffer.length; i++) {
+    for (let channel = 0; channel < numChannels; channel++) {
+      const sample = Math.max(-1, Math.min(1, channels[channel][i]));
+      view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+      offset += 2;
+    }
+  }
+
+  return new Blob([arrayBuffer], { type: 'audio/wav' });
+}
+
+async function normalizeAudioBlob(blob) {
+  const type = (blob?.type || '').toLowerCase();
+  if (!blob || !blob.size || type.includes('wav') || type.includes('mp3') || type.includes('mpeg') || type.includes('ogg') || type.includes('flac')) {
+    return blob;
+  }
+
+  try {
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const arrayBuffer = await blob.arrayBuffer();
+    const decoded = await audioCtx.decodeAudioData(arrayBuffer.slice(0));
+    const wav = audioBufferToWav(decoded);
+    await audioCtx.close();
+    return wav;
+  } catch (error) {
+    console.warn('Audio conversion fallback failed:', error);
+    return blob;
+  }
+}
+
 // ── record ─────────────────────────────────────────────────────────────────
 recBtn.addEventListener('click', async () => {
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     audioChunks = [];
-    mediaRecorder = new MediaRecorder(stream);
+    mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
     mediaRecorder.ondataavailable = e => { if (e.data.size > 0) audioChunks.push(e.data); };
     mediaRecorder.onstop = async () => {
       stream.getTracks().forEach(t => t.stop());
-      const blob = new Blob(audioChunks, { type: 'audio/webm' });
-      await transcribeBlob(blob, 'recording.webm', 'audio/webm');
+      const webmBlob = new Blob(audioChunks, { type: 'audio/webm' });
+      await transcribeBlob(webmBlob, 'recording.webm', 'audio/webm');
     };
     mediaRecorder.start();
     recBtn.disabled  = true;
@@ -167,8 +234,11 @@ audioFile.addEventListener('change', async () => {
 
 // ── transcribe ─────────────────────────────────────────────────────────────
 async function transcribeBlob(blob, filename, type) {
+  const normalizedBlob = await normalizeAudioBlob(blob);
+  const extension = filename.toLowerCase().endsWith('.wav') ? '.wav' : '.wav';
+  const safeName = filename.includes('.') ? filename.replace(/\.[^/.]+$/, extension) : `audio${extension}`;
   const fd = new FormData();
-  fd.append('audio', blob, filename);
+  fd.append('audio', normalizedBlob, safeName);
   try {
     const res  = await fetch('/transcribe', { method: 'POST', body: fd });
     const data = await res.json();
