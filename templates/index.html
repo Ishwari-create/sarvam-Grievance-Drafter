@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Grievance Drafter — Powered by Sarvam AI</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+
+<header>
+  <span class="logo">📋</span>
+  <div>
+    <h1>Grievance Drafter</h1>
+    <p>Convert your complaint into a structured CPGRAMS grievance — powered by Sarvam AI</p>
+  </div>
+</header>
+
+<main>
+
+  <!-- ── Step 1: Input ── -->
+  <div class="card" id="inputCard">
+    <h2>📝 Step 1 — Describe your complaint</h2>
+
+    <textarea
+      id="complaintText"
+      placeholder="Type your complaint here… e.g. 'My pension has not been credited for the last 3 months. I submitted my life certificate in September but still no payment.'"
+    ></textarea>
+
+    <div class="input-row">
+      <!-- Mic record -->
+      <button class="btn btn-danger" id="recBtn" title="Record voice">
+        🎙️ Record
+      </button>
+      <button class="btn btn-outline" id="stopBtn" disabled title="Stop recording">
+        ⏹ Stop
+      </button>
+      <span id="recIndicator"><span class="pulse"></span> Recording…</span>
+
+      <!-- File upload -->
+      <label class="file-label" for="audioFile">
+        📂 Upload audio
+      </label>
+      <input type="file" id="audioFile" accept="audio/*" />
+
+      <!-- Draft button -->
+      <button class="btn btn-primary" id="draftBtn" style="margin-left:auto">
+        ✨ Generate Draft
+      </button>
+    </div>
+
+    <p class="status" id="status"></p>
+  </div>
+
+  <!-- ── Step 2: Output ── -->
+  <div class="card" id="outputCard">
+    <h2>📄 Step 2 — Your CPGRAMS Draft</h2>
+
+    <div class="grievance-grid">
+
+      <div class="field full">
+        <label>Subject</label>
+        <div class="value" id="outSubject"></div>
+      </div>
+
+      <div class="field">
+        <label>Department / Ministry</label>
+        <div class="value" id="outDept"></div>
+      </div>
+
+      <div class="field">
+        <label>Category</label>
+        <div class="value" id="outCategory"></div>
+      </div>
+
+      <div class="field">
+        <label>Urgency</label>
+        <div class="value" id="outUrgency"></div>
+      </div>
+
+      <div class="field full">
+        <label>Grievance Text</label>
+        <div class="grievance-text" id="outText"></div>
+      </div>
+
+      <div class="field full">
+        <label>Documents to Attach</label>
+        <div id="outDocs"></div>
+      </div>
+
+    </div>
+
+    <div class="output-actions">
+      <button class="btn btn-success" id="copyBtn">📋 Copy draft</button>
+      <button class="btn btn-outline"  id="redraftBtn">🔄 Edit &amp; Re-draft</button>
+    </div>
+  </div>
+
+</main>
+
+<script>
+// ── state ──────────────────────────────────────────────────────────────────
+let mediaRecorder = null;
+let audioChunks  = [];
+
+const complaintText = document.getElementById('complaintText');
+const recBtn        = document.getElementById('recBtn');
+const stopBtn       = document.getElementById('stopBtn');
+const recIndicator  = document.getElementById('recIndicator');
+const audioFile     = document.getElementById('audioFile');
+const draftBtn      = document.getElementById('draftBtn');
+const statusEl      = document.getElementById('status');
+const outputCard    = document.getElementById('outputCard');
+
+// ── helpers ────────────────────────────────────────────────────────────────
+function setStatus(msg, isError = false) {
+  statusEl.textContent = msg;
+  statusEl.className = 'status' + (isError ? ' error' : '');
+}
+
+function setLoading(btn, loading, label) {
+  btn.disabled = loading;
+  btn.innerHTML = loading
+    ? `<span class="spinner"></span> ${label}`
+    : btn.dataset.originalLabel;
+}
+
+// ── record ─────────────────────────────────────────────────────────────────
+recBtn.addEventListener('click', async () => {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    audioChunks = [];
+    mediaRecorder = new MediaRecorder(stream);
+    mediaRecorder.ondataavailable = e => { if (e.data.size > 0) audioChunks.push(e.data); };
+    mediaRecorder.onstop = async () => {
+      stream.getTracks().forEach(t => t.stop());
+      const blob = new Blob(audioChunks, { type: 'audio/webm' });
+      await transcribeBlob(blob, 'recording.webm', 'audio/webm');
+    };
+    mediaRecorder.start();
+    recBtn.disabled  = true;
+    stopBtn.disabled = false;
+    recIndicator.classList.add('active');
+    setStatus('Recording… press Stop when done.');
+  } catch (err) {
+    setStatus('Microphone access denied: ' + err.message, true);
+  }
+});
+
+stopBtn.addEventListener('click', () => {
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+    mediaRecorder.stop();
+  }
+  recBtn.disabled  = false;
+  stopBtn.disabled = true;
+  recIndicator.classList.remove('active');
+  setStatus('Processing audio…');
+});
+
+// ── file upload ────────────────────────────────────────────────────────────
+audioFile.addEventListener('change', async () => {
+  const file = audioFile.files[0];
+  if (!file) return;
+  setStatus(`Uploading ${file.name}…`);
+  await transcribeBlob(file, file.name, file.type);
+});
+
+// ── transcribe ─────────────────────────────────────────────────────────────
+async function transcribeBlob(blob, filename, type) {
+  const fd = new FormData();
+  fd.append('audio', blob, filename);
+  try {
+    const res  = await fetch('/transcribe', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (data.error) { setStatus('Transcription error: ' + data.error, true); return; }
+    complaintText.value = data.transcript;
+    setStatus('✅ Transcription done — review and click Generate Draft.');
+  } catch (err) {
+    setStatus('Network error: ' + err.message, true);
+  }
+}
+
+// ── draft ──────────────────────────────────────────────────────────────────
+draftBtn.dataset.originalLabel = draftBtn.innerHTML;
+
+draftBtn.addEventListener('click', async () => {
+  const complaint = complaintText.value.trim();
+  if (!complaint) { setStatus('Please enter or record a complaint first.', true); return; }
+
+  setLoading(draftBtn, true, 'Drafting…');
+  setStatus('Sending to Sarvam AI…');
+  outputCard.style.display = 'none';
+
+  try {
+    const res  = await fetch('/draft', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ complaint }),
+    });
+    const data = await res.json();
+    if (data.error) { setStatus('Draft error: ' + data.error, true); return; }
+    renderGrievance(data.grievance);
+    setStatus('✅ Draft generated! Review below.');
+  } catch (err) {
+    setStatus('Network error: ' + err.message, true);
+  } finally {
+    setLoading(draftBtn, false, '');
+    draftBtn.innerHTML = '✨ Generate Draft';
+    draftBtn.disabled  = false;
+  }
+});
+
+// ── render ─────────────────────────────────────────────────────────────────
+function renderGrievance(g) {
+  document.getElementById('outSubject').textContent  = g.subject  || '—';
+  document.getElementById('outDept').textContent     = g.department || '—';
+  document.getElementById('outCategory').textContent = g.category || '—';
+  document.getElementById('outText').textContent     = g.grievance_text || '—';
+
+  const urgEl = document.getElementById('outUrgency');
+  urgEl.innerHTML = `<span class="tag urgency-${g.urgency}">${g.urgency || '—'}</span>`;
+
+  const docsEl = document.getElementById('outDocs');
+  docsEl.innerHTML = (g.documents_required || [])
+    .map(d => `<span class="tag">${d}</span>`).join('');
+
+  outputCard.style.display = 'block';
+  outputCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+// ── copy ───────────────────────────────────────────────────────────────────
+document.getElementById('copyBtn').addEventListener('click', () => {
+  const g = {
+    Subject:    document.getElementById('outSubject').textContent,
+    Department: document.getElementById('outDept').textContent,
+    Category:   document.getElementById('outCategory').textContent,
+    Urgency:    document.getElementById('outUrgency').textContent.trim(),
+    Grievance:  document.getElementById('outText').textContent,
+    Documents:  document.getElementById('outDocs').textContent.trim(),
+  };
+  const text = Object.entries(g).map(([k,v]) => `${k}:\n${v}`).join('\n\n');
+  navigator.clipboard.writeText(text).then(() => {
+    setStatus('📋 Copied to clipboard!');
+  });
+});
+
+// ── re-draft ───────────────────────────────────────────────────────────────
+document.getElementById('redraftBtn').addEventListener('click', () => {
+  outputCard.style.display = 'none';
+  complaintText.focus();
+  setStatus('Edit your complaint above and generate a new draft.');
+});
+</script>
+
+</body>
+</html>
+
